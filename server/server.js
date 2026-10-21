@@ -1,92 +1,47 @@
+/**
+ * Collaborative CRDT WebSocket Server
+ * Powers multi-user real-time document editing, multiple cursors, and awareness
+ */
 
-const express = require("express");
 const http = require("http");
+const WebSocket = require("ws");
+const express = require("express");
 const cors = require("cors");
-const { Server } = require("socket.io");
+const { setupWSConnection } = require("y-websocket/bin/utils.cjs");
 
 const app = express();
 app.use(cors());
 
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "CRDT Collaborative Server is running",
+    websocket: "Connect via ws://localhost:1234/<room-name>"
+  });
+});
+
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+// Initialize WebSocket server
+const wss = new WebSocket.Server({ noServer: true });
+
+wss.on("connection", (ws, req) => {
+  setupWSConnection(ws, req);
+  console.log(`[CRDT WS] New peer connected to room: ${req.url.slice(1)}`);
 });
 
-let crdtState = {};
-
-function mergeCRDT(current, incoming) {
-  const merged = { ...current };
-
-  for (const [id, value] of Object.entries(incoming)) {
-    if (
-      typeof id !== "string" ||
-      !Number.isSafeInteger(value) ||
-      value < 0
-    ) {
-      continue;
-    }
-
-    merged[id] = Math.max(merged[id] ?? 0, value);
-  }
-
-  return merged;
-}
-
-function getTotal(state) {
-  return Object.values(state).reduce(
-    (sum, count) => sum + count,
-    0
-  );
-}
-
-function broadcastState() {
-  io.emit("crdt-state", {
-    state: crdtState,
-    total: getTotal(crdtState),
-  });
-}
-
-app.get("/", (req, res) => {
-  res.send("CRDT server is running");
-});
-
-io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
-
-  // Send current shared state to the newly connected client.
-  socket.emit("crdt-state", {
-    state: crdtState,
-    total: getTotal(crdtState),
-  });
-
-  socket.on("replica-state", (incoming) => {
-    if (
-      !incoming ||
-      typeof incoming !== "object" ||
-      Array.isArray(incoming)
-    ) {
-      return;
-    }
-
-    crdtState = mergeCRDT(crdtState, incoming);
-
-    console.log("Updated CRDT state:", crdtState);
-    console.log("Shared total:", getTotal(crdtState));
-
-    broadcastState();
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Client disconnected:", socket.id);
+server.on("upgrade", (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit("connection", ws, request);
   });
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 1234;
+const HOST = process.env.HOST || "0.0.0.0";
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRDT server running on port ${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`===============================================`);
+  console.log(`🚀 CRDT Server running at http://${HOST}:${PORT}`);
+  console.log(`📡 WebSocket ready on ws://${HOST}:${PORT}`);
+  console.log(`===============================================`);
 });

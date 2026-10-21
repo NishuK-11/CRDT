@@ -1,425 +1,482 @@
 
-// import { useEffect, useRef, useState } from "react";
-// import { io } from "socket.io-client";
-
-// const SERVER_URL = "http://localhost:5000";
-
-// function mergeCRDT(local, incoming) {
-//   const merged = { ...local };
-
-//   for (const [id, value] of Object.entries(incoming)) {
-//     if (
-//       typeof value !== "number" ||
-//       !Number.isSafeInteger(value) ||
-//       value < 0
-//     ) {
-//       continue;
-//     }
-
-//     merged[id] = Math.max(merged[id] ?? 0, value);
-//   }
-
-//   return merged;
-// }
-
-// function sameState(a, b) {
-//   const keys = new Set([
-//     ...Object.keys(a),
-//     ...Object.keys(b),
-//   ]);
-
-//   for (const key of keys) {
-//     if ((a[key] ?? 0) !== (b[key] ?? 0)) {
-//       return false;
-//     }
-//   }
-
-//   return true;
-// }
-
-// function getReplicaId() {
-//   let id = sessionStorage.getItem("crdt-replica-id");
-
-//   if (!id) {
-//     id = crypto.randomUUID();
-//     sessionStorage.setItem("crdt-replica-id", id);
-//   }
-
-//   return id;
-// }
-
-// function getSavedState() {
-//   try {
-//     const saved = JSON.parse(
-//       sessionStorage.getItem("crdt-local-state") || "{}"
-//     );
-
-//     if (
-//       !saved ||
-//       typeof saved !== "object" ||
-//       Array.isArray(saved)
-//     ) {
-//       return {};
-//     }
-
-//     return saved;
-//   } catch {
-//     return {};
-//   }
-// }
-
-// export default function App() {
-//   const [replicaId] = useState(getReplicaId);
-
-//   const [localState, setLocalState] = useState(getSavedState);
-//   const [sharedState, setSharedState] = useState({});
-//   const [connected, setConnected] = useState(false);
-
-//   const socketRef = useRef(null);
-//   const localStateRef = useRef(localState);
-
-//   // Keep the latest local state available to event handlers.
-//   useEffect(() => {
-//     localStateRef.current = localState;
-
-//     sessionStorage.setItem(
-//       "crdt-local-state",
-//       JSON.stringify(localState)
-//     );
-//   }, [localState]);
-
-//   useEffect(() => {
-//     const socket = io(SERVER_URL);
-//     socketRef.current = socket;
-
-//     socket.on("connect", () => {
-//       setConnected(true);
-
-//       socket.emit(
-//         "replica-state",
-//         localStateRef.current
-//       );
-//     });
-
-//     socket.on("disconnect", () => {
-//       setConnected(false);
-//     });
-
-//     socket.on("connect_error", (error) => {
-//       setConnected(false);
-//       console.error("Connection error:", error.message);
-//     });
-
-//     socket.on("crdt-state", (message) => {
-//       if (
-//         !message?.state ||
-//         typeof message.state !== "object" ||
-//         Array.isArray(message.state)
-//       ) {
-//         return;
-//       }
-
-//       const serverState = message.state;
-
-//       const merged = mergeCRDT(
-//         localStateRef.current,
-//         serverState
-//       );
-
-//       localStateRef.current = merged;
-
-//       setLocalState(merged);
-//       setSharedState(merged);
-
-//       sessionStorage.setItem(
-//         "crdt-local-state",
-//         JSON.stringify(merged)
-//       );
-
-//       // Publish local data that the server hasn't received yet.
-//       if (!sameState(merged, serverState)) {
-//         socket.emit("replica-state", merged);
-//       }
-//     });
-
-//     return () => {
-//       socket.disconnect();
-//       socketRef.current = null;
-//     };
-//   }, []);
-
-//   function publishState(next) {
-//     localStateRef.current = next;
-//     setLocalState(next);
-
-//     sessionStorage.setItem(
-//       "crdt-local-state",
-//       JSON.stringify(next)
-//     );
-
-//     if (socketRef.current?.connected) {
-//       socketRef.current.emit("replica-state", next);
-//     }
-//   }
-
-//   function increment() {
-//     if (!socketRef.current?.connected) {
-//       alert("Server connected nahi hai. Backend check karo.");
-//       return;
-//     }
-
-//     const current = localStateRef.current;
-
-//     const next = {
-//       ...current,
-//       [replicaId]: (current[replicaId] ?? 0) + 1,
-//     };
-
-//     publishState(next);
-//   }
-
-//   function simulateFourUsers() {
-//     if (!socketRef.current?.connected) {
-//       alert("Server connected nahi hai. Backend check karo.");
-//       return;
-//     }
-
-//     const current = localStateRef.current;
-//     const next = { ...current };
-
-//     const simulatedUsers = [
-//       `${replicaId}-sim-A`,
-//       `${replicaId}-sim-B`,
-//       `${replicaId}-sim-C`,
-//       `${replicaId}-sim-D`,
-//     ];
-
-//     // Each simulated user has an independent CRDT component.
-//     for (const userId of simulatedUsers) {
-//       next[userId] = (next[userId] ?? 0) + 1;
-//     }
-
-//     // Send all four increments in one state update.
-//     publishState(next);
-//   }
-
-//   const total = Object.values(sharedState).reduce(
-//     (sum, value) => sum + value,
-//     0
-//   );
-
-//   return (
-//     <main
-//       style={{
-//         fontFamily: "Arial, sans-serif",
-//         maxWidth: 720,
-//         margin: "40px auto",
-//         padding: 24,
-//         background: "#111827",
-//         color: "#f9fafb",
-//         borderRadius: 14,
-//         minHeight: 400,
-//       }}
-//     >
-//       <h1>CRDT Patient Counter</h1>
-
-//       <p>
-//         Connection:{" "}
-//         {connected ? "🟢 Connected" : "🔴 Disconnected"}
-//       </p>
-
-//       <p>
-//         My Replica ID: <code>{replicaId.slice(0, 8)}</code>
-//       </p>
-
-//       <h2>
-//         My local count: {localState[replicaId] ?? 0}
-//       </h2>
-
-//       <div
-//         style={{
-//           display: "flex",
-//           flexWrap: "wrap",
-//           gap: 12,
-//           margin: "20px 0",
-//         }}
-//       >
-//         <button
-//           onClick={increment}
-//           disabled={!connected}
-//           style={buttonStyle}
-//         >
-//           Add patient +1
-//         </button>
-
-//         <button
-//           onClick={simulateFourUsers}
-//           disabled={!connected}
-//           style={buttonStyle}
-//         >
-//           Simulate 4 Users (+4)
-//         </button>
-//       </div>
-
-//       <h2>Server shared total: {total}</h2>
-
-//       <h3>Merged CRDT state</h3>
-
-//       <pre
-//         style={{
-//           background: "#030712",
-//           color: "#86efac",
-//           padding: 16,
-//           borderRadius: 8,
-//           overflowX: "auto",
-//           whiteSpace: "pre-wrap",
-//           overflowWrap: "anywhere",
-//         }}
-//       >
-//         {JSON.stringify(sharedState, null, 2)}
-//       </pre>
-//     </main>
-//   );
-// }
-
-// const buttonStyle = {
-//   padding: "12px 16px",
-//   border: "none",
-//   borderRadius: 8,
-//   cursor: "pointer",
-//   fontWeight: "bold",
-// };
-
-
-
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
+import DrawingCanvas from "./components/Canvas";
 
-const SERVER_URL = "ws://localhost:1234";
-const ROOM_NAME = "nishu-first-document";
+const ROOM_NAME = "anicanvas-shared-drawing";
+
+function createSharedPage(name) {
+  const page = new Y.Map();
+  page.set("name", name);
+  page.set("strokes", new Y.Array());
+  return page;
+}
 
 export default function App() {
-  const [text, setText] = useState("");
-  const [status, setStatus] = useState("Connecting...");
+  const [pages, setPages] = useState([]);
+  const [activePageId, setActivePageId] = useState("page-1");
+  const [connection, setConnection] = useState("Connecting...");
+  const [renamingId, setRenamingId] = useState(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [doc, setDoc] = useState(null);
+  const [sharedPages, setSharedPages] = useState(null);
+  const [strokes, setStrokes] = useState([]);
+  const [undoManager, setUndoManager] = useState(null);
+  const [historyState, setHistoryState] = useState({
+    canUndo: false,
+    canRedo: false,
+  });
 
-  const ytextRef = useRef(null);
-
+  // Connect to the shared Yjs room.
   useEffect(() => {
-    // 1. Create a Yjs document
     const ydoc = new Y.Doc();
-
-    // 2. Get shared text from the Yjs document
-    const ytext = ydoc.getText("editor");
-    ytextRef.current = ytext;
-
-    // 3. Connect this document to the WebSocket server
     const provider = new WebsocketProvider(
-      SERVER_URL,
+      "ws://localhost:1234",
       ROOM_NAME,
       ydoc
     );
 
-    // 4. Show connection status
-    const handleStatus = ({ status }) => {
-      setStatus(status);
-    };
+    const pageMap = ydoc.getMap("pages");
 
-    provider.on("status", handleStatus);
+    function syncPages() {
+      const result = [];
 
-    // 5. Update React whenever Yjs text changes
-    const syncText = () => {
-      setText(ytext.toString());
-    };
+      pageMap.forEach((page, id) => {
+        result.push({
+          id,
+          name: page.get("name"),
+          strokes: page.get("strokes"),
+        });
+      });
 
-    ytext.observe(syncText);
-    syncText();
+      result.sort((a, b) => {
+        if (a.id === "page-1") return -1;
+        if (b.id === "page-1") return 1;
+        return a.name.localeCompare(b.name);
+      });
 
-    // 6. Cleanup when the component unmounts
+      setPages(result);
+
+      setActivePageId((current) => {
+        if (result.some((page) => page.id === current)) return current;
+        return result[0]?.id ?? "page-1";
+      });
+    }
+
+    function onStatus({ status }) {
+      setConnection(status);
+    }
+
+    // Create the first page only when the room is empty.
+    if (pageMap.size === 0) {
+      pageMap.set("page-1", createSharedPage("Page 1"));
+    }
+
+    pageMap.observeDeep(syncPages);
+    provider.on("status", onStatus);
+
+    setDoc(ydoc);
+    setSharedPages(pageMap);
+    syncPages();
+
     return () => {
-      provider.off("status", handleStatus);
-      ytext.unobserve(syncText);
+      pageMap.unobserveDeep(syncPages);
+      provider.off("status", onStatus);
       provider.destroy();
       ydoc.destroy();
-      ytextRef.current = null;
     };
   }, []);
 
-  // Find the changed portion and apply it to Yjs
-  function handleChange(event) {
-    const ytext = ytextRef.current;
+  const activePage = pages.find((page) => page.id === activePageId);
 
-    if (!ytext) return;
+  // Subscribe to the selected page's strokes.
+  useEffect(() => {
+    if (!sharedPages || !activePageId) return;
 
-    const oldText = ytext.toString();
-    const newText = event.target.value;
+    const page = sharedPages.get(activePageId);
 
-    // Find the common beginning
-    let start = 0;
-
-    while (
-      start < oldText.length &&
-      start < newText.length &&
-      oldText[start] === newText[start]
-    ) {
-      start++;
+    if (!page) {
+      setStrokes([]);
+      return;
     }
 
-    // Find the common ending
-    let oldEnd = oldText.length;
-    let newEnd = newText.length;
+    const sharedStrokes = page.get("strokes");
 
-    while (
-      oldEnd > start &&
-      newEnd > start &&
-      oldText[oldEnd - 1] === newText[newEnd - 1]
-    ) {
-      oldEnd--;
-      newEnd--;
+    function syncStrokes() {
+      setStrokes(sharedStrokes.toArray());
     }
 
-    // Apply only the changed section
-    ytext.doc.transact(() => {
-      const deleteCount = oldEnd - start;
+    sharedStrokes.observe(syncStrokes);
+    syncStrokes();
 
-      if (deleteCount > 0) {
-        ytext.delete(start, deleteCount);
+    return () => {
+      sharedStrokes.unobserve(syncStrokes);
+    };
+  }, [sharedPages, activePageId]);
+
+  // Each page gets its own UndoManager.
+  useEffect(() => {
+    if (!sharedPages || !activePageId) {
+      setUndoManager(null);
+      setHistoryState({ canUndo: false, canRedo: false });
+      return;
+    }
+
+    const page = sharedPages.get(activePageId);
+
+    if (!page) return;
+
+    const sharedStrokes = page.get("strokes");
+    const manager = new Y.UndoManager(sharedStrokes);
+
+    function updateHistory() {
+      setHistoryState({
+        canUndo: manager.undoStack.length > 0,
+        canRedo: manager.redoStack.length > 0,
+      });
+    }
+
+    manager.on("stack-item-added", updateHistory);
+    manager.on("stack-item-popped", updateHistory);
+    manager.on("stack-cleared", updateHistory);
+
+    setUndoManager(manager);
+    updateHistory();
+
+    return () => {
+      manager.off("stack-item-added", updateHistory);
+      manager.off("stack-item-popped", updateHistory);
+      manager.off("stack-cleared", updateHistory);
+      manager.destroy();
+    };
+  }, [sharedPages, activePageId]);
+
+  function addPage() {
+    if (!sharedPages) return;
+
+    const id = crypto.randomUUID();
+    const number = pages.length + 1;
+
+    sharedPages.set(id, createSharedPage(`Page ${number}`));
+    setActivePageId(id);
+    setRenamingId(null);
+  }
+
+  function renamePage(id) {
+    const name = nameDraft.trim();
+    if (!name || !sharedPages) return;
+
+    const page = sharedPages.get(id);
+    if (page) page.set("name", name);
+
+    setRenamingId(null);
+    setNameDraft("");
+  }
+
+  // Apply only the changes made by this drawing action.
+  // Do not replace the complete shared array: that could overwrite
+  // another user's stroke that arrived while this user was drawing.
+  function commitStrokes(nextStrokes, baseStrokes) {
+    if (!sharedPages || !activePageId) return;
+
+    const page = sharedPages.get(activePageId);
+    if (!page) return;
+
+    const shared = page.get("strokes");
+    const current = shared.toArray();
+
+    const baseIds = new Set(baseStrokes.map((stroke) => stroke.id));
+    const nextIds = new Set(nextStrokes.map((stroke) => stroke.id));
+    const currentIds = new Set(current.map((stroke) => stroke.id));
+
+    const removedIds = new Set(
+      baseStrokes
+        .filter((stroke) => !nextIds.has(stroke.id))
+        .map((stroke) => stroke.id)
+    );
+
+    const additions = nextStrokes.filter(
+      (stroke) => !currentIds.has(stroke.id)
+    );
+
+    doc.transact(() => {
+      // Delete only strokes this action actually erased.
+      // Delete from the end so array indexes remain valid.
+      for (let i = shared.length - 1; i >= 0; i--) {
+        const stroke = shared.get(i);
+        if (removedIds.has(stroke.id)) {
+          shared.delete(i, 1);
+        }
       }
 
-      const insertedText = newText.slice(start, newEnd);
-
-      if (insertedText.length > 0) {
-        ytext.insert(start, insertedText);
+      // Add new brush strokes or the fragments left by the eraser.
+      if (additions.length > 0) {
+        shared.push(additions);
       }
     });
   }
 
+  function undo() {
+    undoManager?.undo();
+  }
+
+  function redo() {
+    undoManager?.redo();
+  }
+
+  function clearPage() {
+    if (!sharedPages || !activePageId) return;
+
+    const page = sharedPages.get(activePageId);
+    if (!page) return;
+
+    const shared = page.get("strokes");
+
+    // Clear the currently known strokes in one undoable transaction.
+    doc.transact(() => {
+      if (shared.length > 0) {
+        shared.delete(0, shared.length);
+      }
+    });
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      const target = event.target;
+      const isTyping =
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+      if (isTyping || !(event.ctrlKey || event.metaKey)) return;
+
+      const key = event.key.toLowerCase();
+
+      if (key === "z" && event.shiftKey) {
+        event.preventDefault();
+        redo();
+      } else if (key === "z") {
+        event.preventDefault();
+        undo();
+      } else if (key === "y") {
+        event.preventDefault();
+        redo();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undoManager]);
+
   return (
-    <div style={{ maxWidth: "700px", margin: "40px auto", padding: "20px" }}>
-      <h1>Yjs Collaborative Text Editor</h1>
+    <main style={styles.app}>
+      <header style={styles.header}>
+        <h1>AniCanvas 🎨</h1>
+        <p>Draw your anime story together.</p>
+        <p>
+          Connection:{" "}
+          <strong>
+            {connection === "connected" ? "🟢 Connected" : connection}
+          </strong>
+        </p>
+      </header>
 
-      <p>
-        Connection:{" "}
-        <strong>
-          {status}
-        </strong>
+      <section style={styles.pagesSection}>
+        <div style={styles.heading}>
+          <h2>Shared Story Pages</h2>
+          <button style={styles.primary} onClick={addPage}>
+            + New Page
+          </button>
+        </div>
+
+        <div style={styles.pageList}>
+          {pages.map((page) => (
+            <div
+              key={page.id}
+              style={{
+                ...styles.pageCard,
+                ...(page.id === activePageId ? styles.selectedPage : {}),
+              }}
+            >
+              {renamingId === page.id ? (
+                <form
+                  style={styles.renameRow}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    renamePage(page.id);
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    maxLength={40}
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setRenamingId(null);
+                    }}
+                  />
+                  <button type="submit">Save</button>
+                </form>
+              ) : (
+                <>
+                  <button
+                    style={styles.pageButton}
+                    onClick={() => setActivePageId(page.id)}
+                  >
+                    <strong>{page.name}</strong>
+                    <small>{page.strokes.length} strokes</small>
+                  </button>
+
+                  <button
+                    style={styles.renameButton}
+                    onClick={() => {
+                      setRenamingId(page.id);
+                      setNameDraft(page.name);
+                    }}
+                  >
+                    ✎ Rename
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={styles.toolbar}>
+        <button
+          style={styles.toolButton}
+          onClick={undo}
+          disabled={!historyState.canUndo}
+        >
+          ↶ Undo
+        </button>
+
+        <button
+          style={styles.toolButton}
+          onClick={redo}
+          disabled={!historyState.canRedo}
+        >
+          ↷ Redo
+        </button>
+
+        <button style={styles.clearButton} onClick={clearPage}>
+          Clear Page
+        </button>
+      </section>
+
+      {activePage && (
+        <DrawingCanvas
+          key={activePage.id}
+          pageName={activePage.name}
+          strokes={strokes}
+          onCommit={commitStrokes}
+        />
+      )}
+
+      <p style={styles.footer}>
+        Active page: {activePage?.name ?? "Loading..."} · Pages: {pages.length}
+        {" · "}Shared through Yjs
       </p>
-
-      <textarea
-        value={text}
-        onChange={handleChange}
-        placeholder="Start typing here..."
-        rows={12}
-        style={{
-          width: "100%",
-          padding: "12px",
-          fontSize: "16px",
-          boxSizing: "border-box",
-          resize: "vertical",
-        }}
-      />
-
-      <p>Characters: {text.length}</p>
-    </div>
+    </main>
   );
 }
+
+const styles = {
+  app: {
+    maxWidth: 1000,
+    margin: "30px auto",
+    padding: 20,
+    fontFamily: "Arial, sans-serif",
+    color: "#f8fafc",
+    background: "#111827",
+    borderRadius: 16,
+  },
+  header: { textAlign: "center", marginBottom: 24 },
+  pagesSection: {
+    padding: 16,
+    background: "#1f2937",
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  heading: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 14,
+  },
+  primary: {
+    padding: "10px 14px",
+    border: 0,
+    borderRadius: 8,
+    background: "#db2777",
+    color: "white",
+    cursor: "pointer",
+  },
+  pageList: { display: "flex", flexWrap: "wrap", gap: 10 },
+  pageCard: {
+    width: 155,
+    padding: 10,
+    background: "#111827",
+    border: "1px solid #475569",
+    borderRadius: 10,
+  },
+  selectedPage: { border: "2px solid #f472b6" },
+  pageButton: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 6,
+    width: "100%",
+    border: 0,
+    background: "transparent",
+    color: "white",
+    cursor: "pointer",
+    overflowWrap: "anywhere",
+  },
+  renameButton: {
+    marginTop: 8,
+    padding: "5px 7px",
+    background: "transparent",
+    border: "1px solid #64748b",
+    borderRadius: 6,
+    color: "#f9a8d4",
+    cursor: "pointer",
+  },
+  renameRow: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 5,
+    marginTop: 8,
+  },
+  toolbar: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 16,
+  },
+  toolButton: {
+    padding: "9px 14px",
+    border: "1px solid #64748b",
+    borderRadius: 8,
+    background: "#1f2937",
+    color: "white",
+    cursor: "pointer",
+  },
+  clearButton: {
+    padding: "9px 14px",
+    border: "1px solid #be123c",
+    borderRadius: 8,
+    background: "#881337",
+    color: "white",
+    cursor: "pointer",
+  },
+  footer: {
+    textAlign: "center",
+    color: "#cbd5e1",
+    fontSize: 13,
+  },
+};

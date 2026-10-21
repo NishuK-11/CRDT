@@ -1,0 +1,71 @@
+
+import { useRef } from "react";
+
+export default function DrawingCanvas() {
+  const canvasRef = useRef(null);
+  const isDrawing = useRef(false);
+
+  function getPosition(event) {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function startDrawing(event) {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const { x, y } = getPosition(event);
+
+    isDrawing.current = true;
+    canvas.setPointerCapture(event.pointerId);
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+
+  function draw(event) {
+    if (!isDrawing.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const { x, y } = getPosition(event);
+
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  function stopDrawing() {
+    isDrawing.current = false;
+  }
+
+  return (
+    <div style={{ padding: 20, color: "white" }}>
+      <h2>AniCanvas 🎨</h2>
+      <p>Draw anything with your mouse!</p>
+
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={500}
+        onPointerDown={startDrawing}
+        onPointerMove={draw}
+        onPointerUp={stopDrawing}
+        onPointerCancel={stopDrawing}
+        style={{
+          display: "block",
+          width: "100%",
+          maxWidth: 800,
+          background: "#1e1e2e",
+          border: "2px solid #8b5cf6",
+          borderRadius: 12,
+          cursor: "crosshair",
+          touchAction: "none",
+        }}
+      />
+    </div>
+  );
+}
