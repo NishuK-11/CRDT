@@ -1,10 +1,16 @@
-
 import { useEffect, useState } from "react";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import DrawingCanvas from "./components/Canvas";
 
 const ROOM_NAME = "anicanvas-shared-drawing";
+
+function getServerUrl() {
+  if (typeof window !== "undefined" && window.location && window.location.hostname) {
+    return `ws://${window.location.hostname}:1234`;
+  }
+  return "ws://10.16.3.101:1234";
+}
 
 function createSharedPage(name) {
   const page = new Y.Map();
@@ -28,94 +34,111 @@ export default function App() {
     canRedo: false,
   });
 
-  // Connect to the shared Yjs room.
+  // Connect to the shared Yjs room
   useEffect(() => {
     const ydoc = new Y.Doc();
-    const provider = new WebsocketProvider(
-      "ws://localhost:1234",
-      ROOM_NAME,
-      ydoc
-    );
-
+    const serverUrl = getServerUrl();
+    const provider = new WebsocketProvider(serverUrl, ROOM_NAME, ydoc);
     const pageMap = ydoc.getMap("pages");
 
-    function syncPages() {
-      const result = [];
-
+    function syncAll() {
+      const pageList = [];
       pageMap.forEach((page, id) => {
-        result.push({
+        if (!page || typeof page.get !== "function") return;
+        const sharedStrokes = page.get("strokes");
+        const count = sharedStrokes?.length ?? 0;
+        pageList.push({
           id,
-          name: page.get("name"),
-          strokes: page.get("strokes"),
+          name: page.get("name") || id,
+          strokeCount: count,
         });
       });
 
-      result.sort((a, b) => {
+      pageList.sort((a, b) => {
         if (a.id === "page-1") return -1;
         if (b.id === "page-1") return 1;
         return a.name.localeCompare(b.name);
       });
 
-      setPages(result);
+      setPages(pageList);
 
-      setActivePageId((current) => {
-        if (result.some((page) => page.id === current)) return current;
-        return result[0]?.id ?? "page-1";
+      // Synchronize active page strokes directly from the document
+      setActivePageId((currentActiveId) => {
+        const targetId = pageList.some((p) => p.id === currentActiveId)
+          ? currentActiveId
+          : (pageList[0]?.id ?? "page-1");
+
+        const targetPage = pageMap.get(targetId);
+        if (targetPage && typeof targetPage.get === "function") {
+          const s = targetPage.get("strokes");
+          if (s && typeof s.toArray === "function") {
+            setStrokes(s.toArray());
+          } else {
+            setStrokes([]);
+          }
+        } else {
+          setStrokes([]);
+        }
+
+        return targetId;
       });
     }
 
     function onStatus({ status }) {
+      console.log("Yjs connection status:", status);
       setConnection(status);
     }
 
-    // Create the first page only when the room is empty.
-    if (pageMap.size === 0) {
-      pageMap.set("page-1", createSharedPage("Page 1"));
+    function onConnectionError(event) {
+      console.error("WebSocket connection error:", event);
     }
 
-    pageMap.observeDeep(syncPages);
+    // Observe all deep mutations in pageMap (new pages, renaming, added/removed strokes)
+    pageMap.observeDeep(syncAll);
     provider.on("status", onStatus);
+    provider.on("connection-error", onConnectionError);
+
+    // Initialize initial page ONLY after websocket syncs and room is truly empty
+    provider.on("synced", (isSynced) => {
+      if (isSynced) {
+        if (pageMap.size === 0) {
+          ydoc.transact(() => {
+            pageMap.set("page-1", createSharedPage("Page 1"));
+          });
+        }
+        syncAll();
+      }
+    });
 
     setDoc(ydoc);
     setSharedPages(pageMap);
-    syncPages();
+    syncAll();
 
     return () => {
-      pageMap.unobserveDeep(syncPages);
+      pageMap.unobserveDeep(syncAll);
       provider.off("status", onStatus);
+      provider.off("connection-error", onConnectionError);
       provider.destroy();
       ydoc.destroy();
     };
   }, []);
 
+  function handleSelectPage(pageId) {
+    setActivePageId(pageId);
+    if (sharedPages) {
+      const targetPage = sharedPages.get(pageId);
+      if (targetPage && typeof targetPage.get === "function") {
+        const s = targetPage.get("strokes");
+        setStrokes(s && typeof s.toArray === "function" ? s.toArray() : []);
+      } else {
+        setStrokes([]);
+      }
+    }
+  }
+
   const activePage = pages.find((page) => page.id === activePageId);
 
-  // Subscribe to the selected page's strokes.
-  useEffect(() => {
-    if (!sharedPages || !activePageId) return;
-
-    const page = sharedPages.get(activePageId);
-
-    if (!page) {
-      setStrokes([]);
-      return;
-    }
-
-    const sharedStrokes = page.get("strokes");
-
-    function syncStrokes() {
-      setStrokes(sharedStrokes.toArray());
-    }
-
-    sharedStrokes.observe(syncStrokes);
-    syncStrokes();
-
-    return () => {
-      sharedStrokes.unobserve(syncStrokes);
-    };
-  }, [sharedPages, activePageId]);
-
-  // Each page gets its own UndoManager.
+  // Per-page Undo/Redo manager
   useEffect(() => {
     if (!sharedPages || !activePageId) {
       setUndoManager(null);
@@ -124,10 +147,17 @@ export default function App() {
     }
 
     const page = sharedPages.get(activePageId);
-
-    if (!page) return;
+    if (!page || typeof page.get !== "function") {
+      setUndoManager(null);
+      return;
+    }
 
     const sharedStrokes = page.get("strokes");
+    if (!sharedStrokes || typeof sharedStrokes.toArray !== "function") {
+      setUndoManager(null);
+      return;
+    }
+
     const manager = new Y.UndoManager(sharedStrokes);
 
     function updateHistory() {
@@ -153,64 +183,79 @@ export default function App() {
   }, [sharedPages, activePageId]);
 
   function addPage() {
-    if (!sharedPages) return;
+    if (!sharedPages || !doc) return;
 
     const id = crypto.randomUUID();
     const number = pages.length + 1;
 
-    sharedPages.set(id, createSharedPage(`Page ${number}`));
-    setActivePageId(id);
+    doc.transact(() => {
+      sharedPages.set(id, createSharedPage(`Page ${number}`));
+    });
+
+    handleSelectPage(id);
     setRenamingId(null);
   }
 
   function renamePage(id) {
     const name = nameDraft.trim();
-    if (!name || !sharedPages) return;
+    if (!name || !sharedPages || !doc) return;
 
     const page = sharedPages.get(id);
-    if (page) page.set("name", name);
+    if (page && typeof page.set === "function") {
+      doc.transact(() => {
+        page.set("name", name);
+      });
+    }
 
     setRenamingId(null);
     setNameDraft("");
   }
 
-  // Apply only the changes made by this drawing action.
-  // Do not replace the complete shared array: that could overwrite
-  // another user's stroke that arrived while this user was drawing.
+  // Save new strokes and erase removed strokes collaboratively
   function commitStrokes(nextStrokes, baseStrokes) {
-    if (!sharedPages || !activePageId) return;
+    if (!sharedPages || !activePageId || !doc) {
+      console.error("Cannot save: Yjs document or page is missing");
+      return;
+    }
 
-    const page = sharedPages.get(activePageId);
-    if (!page) return;
+    // 1. Optimistic UI update so stroke never flickers or disappears
+    setStrokes(nextStrokes);
 
-    const shared = page.get("strokes");
+    let page = sharedPages.get(activePageId);
+    if (!page) {
+      doc.transact(() => {
+        page = createSharedPage("Page 1");
+        sharedPages.set(activePageId, page);
+      });
+    }
+
+    let shared = page.get("strokes");
+    if (!shared || typeof shared.toArray !== "function") {
+      doc.transact(() => {
+        shared = new Y.Array();
+        page.set("strokes", shared);
+      });
+    }
+
     const current = shared.toArray();
 
-    const baseIds = new Set(baseStrokes.map((stroke) => stroke.id));
-    const nextIds = new Set(nextStrokes.map((stroke) => stroke.id));
-    const currentIds = new Set(current.map((stroke) => stroke.id));
-
+    const nextIds = new Set(nextStrokes.map((s) => s.id));
+    const currentIds = new Set(current.map((s) => s.id));
     const removedIds = new Set(
-      baseStrokes
-        .filter((stroke) => !nextIds.has(stroke.id))
-        .map((stroke) => stroke.id)
+      baseStrokes.filter((s) => !nextIds.has(s.id)).map((s) => s.id)
     );
-
-    const additions = nextStrokes.filter(
-      (stroke) => !currentIds.has(stroke.id)
-    );
+    const additions = nextStrokes.filter((s) => !currentIds.has(s.id));
 
     doc.transact(() => {
-      // Delete only strokes this action actually erased.
-      // Delete from the end so array indexes remain valid.
+      // Remove strokes in reverse index order
       for (let i = shared.length - 1; i >= 0; i--) {
         const stroke = shared.get(i);
-        if (removedIds.has(stroke.id)) {
+        if (stroke && removedIds.has(stroke.id)) {
           shared.delete(i, 1);
         }
       }
 
-      // Add new brush strokes or the fragments left by the eraser.
+      // Add newly drawn strokes
       if (additions.length > 0) {
         shared.push(additions);
       }
@@ -226,14 +271,17 @@ export default function App() {
   }
 
   function clearPage() {
-    if (!sharedPages || !activePageId) return;
+    if (!sharedPages || !activePageId || !doc) return;
 
     const page = sharedPages.get(activePageId);
     if (!page) return;
 
     const shared = page.get("strokes");
+    if (!shared) return;
 
-    // Clear the currently known strokes in one undoable transaction.
+    // Optimistically clear local state immediately
+    setStrokes([]);
+
     doc.transact(() => {
       if (shared.length > 0) {
         shared.delete(0, shared.length);
@@ -241,6 +289,7 @@ export default function App() {
     });
   }
 
+  // Keyboard shortcuts: Ctrl/Cmd + Z and Ctrl/Cmd + Y
   useEffect(() => {
     function handleKeyDown(event) {
       const target = event.target;
@@ -285,7 +334,11 @@ export default function App() {
       <section style={styles.pagesSection}>
         <div style={styles.heading}>
           <h2>Shared Story Pages</h2>
-          <button style={styles.primary} onClick={addPage}>
+          <button
+            style={styles.primary}
+            onClick={addPage}
+            disabled={!sharedPages}
+          >
             + New Page
           </button>
         </div>
@@ -322,10 +375,10 @@ export default function App() {
                 <>
                   <button
                     style={styles.pageButton}
-                    onClick={() => setActivePageId(page.id)}
+                    onClick={() => handleSelectPage(page.id)}
                   >
                     <strong>{page.name}</strong>
-                    <small>{page.strokes.length} strokes</small>
+                    <small>{page.strokeCount} strokes</small>
                   </button>
 
                   <button
@@ -361,7 +414,11 @@ export default function App() {
           ↷ Redo
         </button>
 
-        <button style={styles.clearButton} onClick={clearPage}>
+        <button
+          style={styles.clearButton}
+          onClick={clearPage}
+          disabled={!activePage}
+        >
           Clear Page
         </button>
       </section>
@@ -376,8 +433,7 @@ export default function App() {
       )}
 
       <p style={styles.footer}>
-        Active page: {activePage?.name ?? "Loading..."} · Pages: {pages.length}
-        {" · "}Shared through Yjs
+        Active page: {activePage?.name ?? "Loading..."} · Pages: {pages.length} · Shared through Yjs
       </p>
     </main>
   );
@@ -393,7 +449,10 @@ const styles = {
     background: "#111827",
     borderRadius: 16,
   },
-  header: { textAlign: "center", marginBottom: 24 },
+  header: {
+    textAlign: "center",
+    marginBottom: 24,
+  },
   pagesSection: {
     padding: 16,
     background: "#1f2937",
@@ -416,7 +475,11 @@ const styles = {
     color: "white",
     cursor: "pointer",
   },
-  pageList: { display: "flex", flexWrap: "wrap", gap: 10 },
+  pageList: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+  },
   pageCard: {
     width: 155,
     padding: 10,
@@ -424,7 +487,9 @@ const styles = {
     border: "1px solid #475569",
     borderRadius: 10,
   },
-  selectedPage: { border: "2px solid #f472b6" },
+  selectedPage: {
+    border: "2px solid #f472b6",
+  },
   pageButton: {
     display: "flex",
     flexDirection: "column",

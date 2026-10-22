@@ -33,15 +33,16 @@ function pointSegmentDistance(point, a, b) {
 }
 
 function drawStroke(ctx, stroke) {
-  if (!stroke.points?.length) return;
+  if (!stroke || !stroke.points || stroke.points.length === 0) return;
 
   ctx.beginPath();
-  ctx.strokeStyle = stroke.color;
-  ctx.lineWidth = stroke.width;
+  ctx.strokeStyle = stroke.color || "#ff69b4";
+  ctx.lineWidth = Number(stroke.width) || 5;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
   const first = stroke.points[0];
+  if (!first) return;
   ctx.moveTo(first.x, first.y);
 
   if (stroke.points.length === 1) {
@@ -49,7 +50,9 @@ function drawStroke(ctx, stroke) {
   } else {
     for (let i = 1; i < stroke.points.length; i++) {
       const point = stroke.points[i];
-      ctx.lineTo(point.x, point.y);
+      if (point) {
+        ctx.lineTo(point.x, point.y);
+      }
     }
   }
 
@@ -241,7 +244,8 @@ export default function DrawingCanvas({ strokes, onCommit, pageName }) {
 
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
-    const visibleStrokes = preview ?? strokes;
+    const visibleStrokes = preview ?? (Array.isArray(strokes) ? strokes : []);
+    console.log("Strokes received:", visibleStrokes.length);
 
     for (const stroke of visibleStrokes) {
       drawStroke(ctx, stroke);
